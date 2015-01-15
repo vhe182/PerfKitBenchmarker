@@ -57,14 +57,17 @@ def Run(benchmark_spec):
         metadata.
   """
   vms = benchmark_spec.vms
-  if not vms[0].IsReachable(vms[1]):
+  source, target = vms[:2]
+  if not source.IsReachable(target):
+    logging.warn('Unable to reach %s from %s (internal IP addresses). '
+                 'No results will be generated.',
+                 target.internal_ip, source.internal_ip)
     return []
-  vm = vms[0]
   logging.info('Ping results:')
-  ping_cmd = 'ping -c 100 %s' % vms[1].internal_ip
-  stdout, _ = vm.RemoteCommand(ping_cmd, should_log=True)
-  stats = re.findall('([0-9]*\\.[0-9]*)', stdout.splitlines()[-1])
-  assert len(stats) == 4
+  ping_cmd = 'ping -c 100 %s' % target.internal_ip
+  stdout, _ = source.RemoteCommand(ping_cmd, should_log=True)
+  stats = re.findall(r'([0-9]*\.[0-9]*)', stdout.splitlines()[-1])
+  assert len(stats) == 4, stdout
   results = []
   metadata = {'ip_type': 'internal'}
   for i in range(4):
