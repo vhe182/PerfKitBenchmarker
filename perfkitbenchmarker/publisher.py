@@ -54,6 +54,11 @@ flags.DEFINE_string(
     None,
     'The BigQuery table to publish results to. This should be of the form '
     '"[project_id:]dataset_name.table_name".')
+flags.DEFINE_boolean(
+    'bq_streaming',
+    False,
+    'A boolean indicating whether to use streaming (bq insert) or POST '
+    '(bq load) to import data.')
 flags.DEFINE_string(
     'bq_path', 'bq', 'Path to the "bq" executable.')
 flags.DEFINE_string(
@@ -321,6 +326,69 @@ class BigQueryPublisher(SamplePublisher):
       vm_util.IssueRetryableCommand(load_cmd)
 
 
+class BigQueryStreamingPublisher(SamplePublisher):
+  """Publishes samples to BigQuery via the Streaming API.
+
+  For more details on the Streaming API and relevant quotas/limits, see:
+    https://cloud.google.com/bigquery/streaming-data-into-bigquery
+
+  Note that the streaming API is not available via the command-line
+
+  Attributes:
+    bigquery_table: string. The bigquery table to publish to, of the form
+      '[project_name:]dataset_name.table_name'
+    project_id: string. Project to use for authenticating with BigQuery.
+    bq_path: string. Path to the 'bq' executable'.
+    service_account: string. Use this service account email address for
+      authorization. For example, 1234567890@developer.gserviceaccount.com
+    service_account_private_key: Filename that contains the service account
+      private key. Must be specified if service_account is specified.
+  """
+
+  def __init__(self, bigquery_table, project_id=None, bq_path='bq',
+               service_account=None, service_account_private_key_file=None):
+    self.bigquery_table = bigquery_table
+    self.project_id = project_id
+    self.bq_path = bq_path
+    self.service_account = service_account
+    self.service_account_private_key_file = service_account_private_key_file
+    self._credentials_file = vm_util.PrependTempDir(DEFAULT_CREDENTIALS_JSON)
+
+    if ((self.service_account is None) !=
+        (self.service_account_private_key_file is None)):
+      raise ValueError('service_account and service_account_private_key '
+                       'must be specified together.')
+
+  def __repr__(self):
+    return '<{0} table="{1}">'.format(type(self).__name__, self.bigquery_table)
+
+  def PublishSamples(self, samples):
+    if not samples:
+      logging.warn('No samples: not publishing to BigQuery')
+      return
+
+    with tempfile.NamedTemporaryFile(prefix='perfkit-bq-pub',
+                                     dir=vm_util.GetTempDir(),
+                                     suffix='.json') as tf:
+      json_publisher = NewlineDelimitedJSONPublisher(tf.name)
+      json_publisher.PublishSamples(samples)
+      logging.info('Publishing %d samples to %s', len(samples),
+                   self.bigquery_table)
+      load_cmd = [self.bq_path]
+      if self.project_id:
+        load_cmd.append('--project_id=' + self.project_id)
+      if self.service_account:
+        assert self.service_account_private_key_file is not None
+        load_cmd.extend(['--service_account=' + self.service_account,
+                         '--service_account_credential_file=' +
+                         self._credentials_file,
+                         '--service_account_private_key_file=' +
+                         self.service_account_private_key_file])
+      load_cmd.extend(['insert',
+                       self.bigquery_table,
+                       tf.name])
+      vm_util.IssueRetryableCommand(load_cmd)
+
 class CloudStoragePublisher(SamplePublisher):
   """Publishes samples to a Google Cloud Storage bucket using gsutil.
 
@@ -403,12 +471,20 @@ class SampleCollector(object):
     publishers.append(NewlineDelimitedJSONPublisher(
         FLAGS.json_path or default_json_path))
     if FLAGS.bigquery_table:
-      publishers.append(BigQueryPublisher(
-          FLAGS.bigquery_table,
-          project_id=FLAGS.bq_project,
-          bq_path=FLAGS.bq_path,
-          service_account=FLAGS.service_account,
-          service_account_private_key_file=FLAGS.service_account_private_key))
+      if FLAGS.bq_streaming:
+        publishers.append(BigQueryStreamingPublisher(
+            FLAGS.bigquery_table,
+            project_id=FLAGS.bq_project,
+            bq_path=FLAGS.bq_path,
+            service_account=FLAGS.service_account,
+            service_account_private_key_file=FLAGS.service_account_private_key))
+      else:
+        publishers.append(BigQueryPublisher(
+            FLAGS.bigquery_table,
+            project_id=FLAGS.bq_project,
+            bq_path=FLAGS.bq_path,
+            service_account=FLAGS.service_account,
+            service_account_private_key_file=FLAGS.service_account_private_key))
 
     if FLAGS.cloud_storage_bucket:
       publishers.append(CloudStoragePublisher(FLAGS.cloud_storage_bucket,
