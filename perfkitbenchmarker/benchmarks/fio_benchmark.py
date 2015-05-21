@@ -76,16 +76,6 @@ def Prepare(benchmark_spec):
 
   disk_size_kb = vm.GetDeviceSizeFromPath(vm.GetScratchDir())
   amount_memory_kb = vm.total_memory_kb
-  if disk_size_kb < amount_memory_kb * flags.FLAGS.memory_multiple:
-    logging.error('%s must be larger than %dx memory"',
-                  vm.GetScratchDir(),
-                  flags.FLAGS.memory_multiple)
-    # TODO(user): exiting here is probably not the correct behavor.
-    #    When FIO is run across a data set which is too not considerably
-    #    larger than the amount of memory then the benchmark results will be
-    #    invalid. Once the benchmark results are returned from Run() an
-    #    invalid (or is that rather a 'valid' flag should be added.
-    exit(1)
   if FLAGS.against_device:
     device_path = vm.scratch_disks[0].GetDevicePath()
     logging.info('Fill scratch disk on %s at %s', vm, device_path)
