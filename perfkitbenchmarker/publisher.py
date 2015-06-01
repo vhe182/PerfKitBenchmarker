@@ -21,7 +21,6 @@ import json
 import logging
 import operator
 import sys
-import tempfile
 import time
 import uuid
 
@@ -49,6 +48,10 @@ flags.DEFINE_string(
     None,
     'A path to write newline-delimited JSON results '
     'Default: write to a run-specific temporary directory')
+flags.DEFINE_boolean(
+    'collapse_labels',
+    True,
+    'Collapse entries in labels.')
 
 flags.DEFINE_string(
     'bigquery_table',
@@ -316,17 +319,19 @@ class NewlineDelimitedJSONPublisher(SamplePublisher):
   The resulting output file is compatible with 'bq load' using
   format NEWLINE_DELIMITED_JSON.
 
-  Metadata is converted to a flat string with key 'labels' via
-  GetLabelsFromDict.
+  If 'collapse_labels' is True, metadata is converted to a flat string with key
+  'labels' via GetLabelsFromDict.
 
   Attributes:
     file_path: string. Destination path to write samples.
     mode: Open mode for 'file_path'. Set to 'a' to append.
+    collapse_labels: boolean. If true, collapse sample metadata.
   """
 
-  def __init__(self, file_path, mode='wb'):
+  def __init__(self, file_path, mode='wb', collapse_labels=True):
     self.file_path = file_path
     self.mode = mode
+    self.collapse_labels = collapse_labels
 
   def __repr__(self):
     return '<{0} file_path="{1}" mode="{2}">'.format(
@@ -338,7 +343,8 @@ class NewlineDelimitedJSONPublisher(SamplePublisher):
     with open(self.file_path, self.mode) as fp:
       for sample in samples:
         sample = sample.copy()
-        sample['labels'] = GetLabelsFromDict(sample.pop('metadata', {}))
+        if self.collapse_labels:
+          sample['labels'] = GetLabelsFromDict(sample.pop('metadata', {}))
         fp.write(json.dumps(sample) + '\n')
 
 
@@ -378,11 +384,13 @@ class BigQueryPublisher(SamplePublisher):
       logging.warn('No samples: not publishing to BigQuery')
       return
 
-    with tempfile.NamedTemporaryFile(prefix='perfkit-bq-pub',
-                                     dir=vm_util.GetTempDir(),
-                                     suffix='.json') as tf:
-      json_publisher = NewlineDelimitedJSONPublisher(tf.name)
+    with vm_util.NamedTemporaryFile(prefix='perfkit-bq-pub',
+                                    dir=vm_util.GetTempDir(),
+                                    suffix='.json') as tf:
+      json_publisher = NewlineDelimitedJSONPublisher(tf.name,
+                                                     collapse_labels=True)
       json_publisher.PublishSamples(samples)
+      tf.close()
       logging.info('Publishing %d samples to %s', len(samples),
                    self.bigquery_table)
       load_cmd = [self.bq_path]
@@ -430,11 +438,12 @@ class CloudStoragePublisher(SamplePublisher):
       return object_name[:GCS_OBJECT_NAME_LENGTH]
 
   def PublishSamples(self, samples):
-    with tempfile.NamedTemporaryFile(prefix='perfkit-gcs-pub',
-                                     dir=vm_util.GetTempDir(),
-                                     suffix='.json') as tf:
+    with vm_util.NamedTemporaryFile(prefix='perfkit-gcs-pub',
+                                    dir=vm_util.GetTempDir(),
+                                    suffix='.json') as tf:
       json_publisher = NewlineDelimitedJSONPublisher(tf.name)
       json_publisher.PublishSamples(samples)
+      tf.close()
       object_name = self._GenerateObjectName()
       storage_uri = 'gs://{0}/{1}'.format(self.bucket, object_name)
       logging.info('Publishing %d samples to %s', len(samples), storage_uri)
@@ -482,7 +491,8 @@ class SampleCollector(object):
     publishers = [LogPublisher(), PrettyPrintStreamPublisher()]
     default_json_path = vm_util.PrependTempDir(DEFAULT_JSON_OUTPUT_NAME)
     publishers.append(NewlineDelimitedJSONPublisher(
-        FLAGS.json_path or default_json_path))
+        FLAGS.json_path or default_json_path,
+        collapse_labels=FLAGS.collapse_labels))
     if FLAGS.bigquery_table:
       publishers.append(BigQueryPublisher(
           FLAGS.bigquery_table,
