@@ -62,9 +62,10 @@ flags.DEFINE_enum('cassandra_stress_command', WRITE_COMMAND,
 
 flags.DEFINE_integer('cassandra_stress_preload_num_keys', 0,
                      'Number of keys to preload into cassandra database. '
-                     'By default, read/counter_read/mixed mode require '
-                     'preload cassandra database. The number of the keys '
-                     'pre-loaded will be the same as --num_keys.')
+                     'Read/counter_read/mixed mode require preloading '
+                     ' cassandra database. If not set, the number of the keys '
+                     'preloaded will be the same as --num_keys for '
+                     'read/counter_read/mixed mode.')
 
 # Options for cassandra-stress
 flags.DEFINE_integer('num_keys', 0,
@@ -106,11 +107,10 @@ flags.DEFINE_integer('cassandra_stress_retries', 1000,
 #  FIXED(val):
 #      A fixed distribution, always returning the same value
 #  Preceding the name with ~ will invert the distribution,
-#  e.g. ~exp(1..10) will yield 10 most.
+#  e.g. ~EXP(1..10) will yield 10 most.
 flags.DEFINE_enum('cassandra_stress_pop_distribution', None,
                   ['EXP', 'EXTREME', 'QEXTREME', 'GAUSSIAN', 'UNIFORM', 'FIXED',
-                   '~EXP', '~EXTREME', '~QEXTREME', '~GAUSSIAN', '~UNIFORM',
-                   '~FIXED'],
+                   '~EXP', '~EXTREME', '~QEXTREME', '~GAUSSIAN', '~UNIFORM'],
                   'The population distribution cassandra-stress uses. '
                   'By default, use no distribution.')
 
@@ -119,7 +119,7 @@ flags.DEFINE_integer('cassandra_stress_pop_size', None,
                      'By default, the size of the pop is the same as '
                      '--num_keys.')
 
-flags.DEFINE_list('cassandra_stress_pop_parameters', None,
+flags.DEFINE_list('cassandra_stress_pop_parameters', [],
                   'Additional parameters to use with. '
                   'This benchmark will calculate min, max for each '
                   'distribution. Some distributions need more parameters. '
@@ -277,6 +277,7 @@ def RunTestOnLoader(vm,
                     data_node_ips,
                     cassandra_stress_command,
                     cassandra_stress_profile_ops,
+                    pop_per_vm,
                     cassandra_stress_pop_dist,
                     cassandra_stress_pop_params):
   """Run Cassandra-stress test on loader node.
@@ -288,8 +289,10 @@ def RunTestOnLoader(vm,
     data_node_ips: List of IP addresses for all data nodes.
     cassandra_stress_command: The cassandra-stress command to use.
     cassandra_stress_profile_ops: The ops to use with user mode.
+    pop_per_vm: Population per loader vm.
     cassandra_stress_pop_dist: The population distribution.
-    cassandra_stress_pop_params: A list of additional population parameters.
+    cassandra_stress_pop_params: String representing additional population
+        parameters.
   """
   if cassandra_stress_command == USER_COMMAND:
     cassandra_stress_command += ' profile={profile} ops\({ops}\)'.format(
@@ -303,18 +306,20 @@ def RunTestOnLoader(vm,
     # TODO: Support more complex replication strategy.
     schema_option = '-schema replication\(factor={replication_factor}\)'.format(
         replication_factor=FLAGS.cassandra_stress_replication_factor)
-  pop_range = '%s..%s' % (loader_index * ops_per_vm + 1,
-                          (loader_index + 1) * ops_per_vm)
-  cassandra_stress_pop_params.insert(0, pop_range)
+
+  pop_range = '%s..%s' % (loader_index * pop_per_vm + 1,
+                          (loader_index + 1) * pop_per_vm)
+  pop_params = pop_range
+  if cassandra_stress_pop_params:
+    pop_params = '%s,%s' % (pop_range, cassandra_stress_pop_params)
   if cassandra_stress_pop_dist:
     pop_dist = 'dist=%s\(%s\)' % (
-        cassandra_stress_pop_dist,
-        ','.join(cassandra_stress_pop_params))
+        cassandra_stress_pop_dist, pop_params)
   else:
     pop_dist = 'seq=%s' % pop_range
   vm.RobustRemoteCommand(
       '{cassandra} {command} cl={consistency_level} n={num_keys} '
-      '-node {nodes} {schema} -pop seq={pop_dist} '
+      '-node {nodes} {schema} -pop {pop_dist} '
       '-log file={result_file} -rate threads={threads} '
       '-errors retries={retries}'.format(
           cassandra=CASSANDRA_STRESS,
@@ -333,6 +338,7 @@ def RunCassandraStress(benchmark_spec,
                        num_ops,
                        cassandra_stress_command,
                        cassandra_stress_profile_ops,
+                       cassandra_stress_pop_size,
                        cassandra_stress_pop_dist,
                        cassandra_stress_pop_params):
   """Start Cassandra test.
@@ -343,14 +349,17 @@ def RunCassandraStress(benchmark_spec,
     num_ops: The number of operations cassandra-stress clients should issue.
     cassandra_stress_command: The cassandra-stress command to use.
     cassandra_stress_profile_ops: The ops to use with user mode.
+    cassandra_stress_pop_size: The population size.
     cassandra_stress_pop_dist: The population distribution.
-    cassandra_stress_pop_params: A list of additional population parameters.
+    cassandra_stress_pop_params: String representing additional population
+        parameters.
   """
   loader_vms = benchmark_spec.vm_groups[CLIENT_GROUP]
   num_loaders = len(loader_vms)
   cassandra_vms = benchmark_spec.vm_groups[CASSANDRA_GROUP]
   data_node_ips = [vm.internal_ip for vm in cassandra_vms]
   ops_per_vm = num_ops / num_loaders
+  pop_per_vm = cassandra_stress_pop_size / num_loaders
   if num_ops % num_loaders:
     logging.warn(
         'Total number of opse rounded to %s (%s ops per loader vm).',
@@ -359,6 +368,7 @@ def RunCassandraStress(benchmark_spec,
   args = [((loader_vms[i], i, ops_per_vm, data_node_ips,
             cassandra_stress_command,
             cassandra_stress_profile_ops,
+            pop_per_vm,
             cassandra_stress_pop_dist,
             cassandra_stress_pop_params), {})
           for i in xrange(0, num_loaders)]
@@ -410,6 +420,7 @@ def RunCassandraStressTest(benchmark_spec,
                            num_ops,
                            cassandra_stress_command,
                            cassandra_stress_profile_ops=None,
+                           cassandra_stress_pop_size=None,
                            cassandra_stress_pop_dist=None,
                            cassandra_stress_pop_params=None):
   """Start all loader nodes as Cassandra clients and run stress test.
@@ -420,13 +431,16 @@ def RunCassandraStressTest(benchmark_spec,
     num_keys: The number of operations cassandra-stress clients should issue.
     cassandra_stress_command: The cassandra-stress command to use.
     cassandra_stress_profile_ops: The ops to use with user mode.
+    cassandra_stress_pop_size: The population size.
     cassandra_stress_pop_dist: The population distribution.
-    cassandra_stress_pop_params: A list of additional population parameters.
+    cassandra_stress_pop_params: String representing additional
+        population parameters.
   """
   try:
     RunCassandraStress(benchmark_spec, num_ops,
                        cassandra_stress_command,
                        cassandra_stress_profile_ops,
+                       cassandra_stress_pop_size,
                        cassandra_stress_pop_dist,
                        cassandra_stress_pop_params)
   finally:
@@ -501,22 +515,18 @@ def Run(benchmark_spec):
   Returns:
     A list of sample.Sample objects.
   """
-  if FLAGS.cassandra_stress_pop_distribution:
-    benchmark_spec.metadata[
-        'pop_dist'] = FLAGS.cassandra_stress_pop_distribution
-    if FLAGS.cassandra_stress_pop_size:
-      benchmark_spec.metadata[
-          'pop_size'] = FLAGS.cassandra_stress_pop_size
-    else:
-      benchmark_spec.metadata[
-          'pop_size'] = benchmark_spec.metadata['num_keys']
-    if FLAGS.cassandra_stress_pop_parameters:
-      benchmark_spec.metadata[
-          'pop_parameters'] = FLAGS.cassandra_stress_pop_parameters
+  benchmark_spec.metadata.update({
+      'pop_size': (FLAGS.cassandra_stress_pop_size or
+                   benchmark_spec.metadata['num_keys']),
+      'pop_dist': FLAGS.cassandra_stress_pop_distribution,
+      'pop_parameters': ','.join(FLAGS.cassandra_stress_pop_parameters)})
+
   RunCassandraStressTest(
       benchmark_spec,
+      benchmark_spec.metadata['num_keys'],
+      FLAGS.cassandra_stress_command,
+      FLAGS.cassandra_stress_ops,
       benchmark_spec.metadata['pop_size'],
-      FLAGS.cassandra_stress_command, '',
       benchmark_spec.metadata['pop_dist'],
       benchmark_spec.metadata['pop_parameters'])
   return CollectResults(benchmark_spec)
