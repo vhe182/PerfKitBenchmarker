@@ -62,8 +62,8 @@ flags.DEFINE_enum('cassandra_stress_command', WRITE_COMMAND,
 
 flags.DEFINE_integer('cassandra_stress_preload_num_keys', 0,
                      'Number of keys to preload into cassandra database. '
-                     'Read/counter_read/mixed mode require preloading '
-                     ' cassandra database. If not set, the number of the keys '
+                     'Read/counter_read/mixed modes require preloading '
+                     'cassandra database. If not set, the number of the keys '
                      'preloaded will be the same as --num_keys for '
                      'read/counter_read/mixed mode.')
 
@@ -307,11 +307,10 @@ def RunTestOnLoader(vm,
     schema_option = '-schema replication\(factor={replication_factor}\)'.format(
         replication_factor=FLAGS.cassandra_stress_replication_factor)
 
-  pop_range = '%s..%s' % (loader_index * pop_per_vm + 1,
+  pop_params = '%s..%s' % (loader_index * pop_per_vm + 1,
                           (loader_index + 1) * pop_per_vm)
-  pop_params = pop_range
   if cassandra_stress_pop_params:
-    pop_params = '%s,%s' % (pop_range, cassandra_stress_pop_params)
+    pop_params = '%s,%s' % (pop_params, cassandra_stress_pop_params)
   if cassandra_stress_pop_dist:
     pop_dist = 'dist=%s\(%s\)' % (
         cassandra_stress_pop_dist, pop_params)
@@ -362,7 +361,7 @@ def RunCassandraStress(benchmark_spec,
   pop_per_vm = cassandra_stress_pop_size / num_loaders
   if num_ops % num_loaders:
     logging.warn(
-        'Total number of opse rounded to %s (%s ops per loader vm).',
+        'Total number of ops rounded to %s (%s ops per loader vm).',
         ops_per_vm * num_loaders, ops_per_vm)
   logging.info('Executing the benchmark.')
   args = [((loader_vms[i], i, ops_per_vm, data_node_ips,
