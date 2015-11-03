@@ -308,14 +308,14 @@ def RunTestOnLoader(vm,
         replication_factor=FLAGS.cassandra_stress_replication_factor)
 
   pop_params = '%s..%s' % (loader_index * pop_per_vm + 1,
-                          (loader_index + 1) * pop_per_vm)
+                           (loader_index + 1) * pop_per_vm)
   if cassandra_stress_pop_params:
     pop_params = '%s,%s' % (pop_params, cassandra_stress_pop_params)
   if cassandra_stress_pop_dist:
     pop_dist = 'dist=%s\(%s\)' % (
         cassandra_stress_pop_dist, pop_params)
   else:
-    pop_dist = 'seq=%s' % pop_range
+    pop_dist = 'seq=%s' % pop_params
   vm.RobustRemoteCommand(
       '{cassandra} {command} cl={consistency_level} n={num_keys} '
       '-node {nodes} {schema} -pop {pop_dist} '
