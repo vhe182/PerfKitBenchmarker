@@ -104,12 +104,10 @@ flags.DEFINE_integer('cassandra_stress_retries', 1000,
 #      A gaussian/normal distribution, with explicitly defined mean and stdev
 #  UNIFORM(min..max):
 #      A uniform distribution over the range [min, max]
-#  FIXED(val):
-#      A fixed distribution, always returning the same value
 #  Preceding the name with ~ will invert the distribution,
 #  e.g. ~EXP(1..10) will yield 10 most, instead of least, often.
 flags.DEFINE_enum('cassandra_stress_pop_distribution', None,
-                  ['EXP', 'EXTREME', 'QEXTREME', 'GAUSSIAN', 'UNIFORM', 'FIXED',
+                  ['EXP', 'EXTREME', 'QEXTREME', 'GAUSSIAN', 'UNIFORM',
                    '~EXP', '~EXTREME', '~QEXTREME', '~GAUSSIAN', '~UNIFORM'],
                   'The population distribution cassandra-stress uses. '
                   'By default, use no distribution.')
