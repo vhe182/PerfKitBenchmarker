@@ -107,7 +107,7 @@ flags.DEFINE_integer('cassandra_stress_retries', 1000,
 #  FIXED(val):
 #      A fixed distribution, always returning the same value
 #  Preceding the name with ~ will invert the distribution,
-#  e.g. ~EXP(1..10) will yield 10 most.
+#  e.g. ~EXP(1..10) will yield 10 most, instead of least, often.
 flags.DEFINE_enum('cassandra_stress_pop_distribution', None,
                   ['EXP', 'EXTREME', 'QEXTREME', 'GAUSSIAN', 'UNIFORM', 'FIXED',
                    '~EXP', '~EXTREME', '~QEXTREME', '~GAUSSIAN', '~UNIFORM'],
@@ -120,10 +120,10 @@ flags.DEFINE_integer('cassandra_stress_pop_size', None,
                      '--num_keys.')
 
 flags.DEFINE_list('cassandra_stress_pop_parameters', [],
-                  'Additional parameters to use with. '
+                  'Additional parameters to use with distribution. '
                   'This benchmark will calculate min, max for each '
                   'distribution. Some distributions need more parameters. '
-                  'Commma-seperated list.')
+                  'Comma-separated list.')
 
 # Options to use with cassandra-stress mixed mode, below flags only matter if
 # --cassandra_stress_command=mixed.
@@ -239,6 +239,7 @@ def Prepare(benchmark_spec):
         benchmark_spec.metadata['num_keys'])
   else:
     benchmark_spec.metadata['num_keys'] = FLAGS.num_keys
+
   if (FLAGS.cassandra_stress_command in PRELOAD_REQUIRED and
       not FLAGS.cassandra_stress_preload_num_keys):
     benchmark_spec.metadata['num_preload_keys'] = benchmark_spec.metadata[
@@ -248,6 +249,7 @@ def Prepare(benchmark_spec):
         'num_preload_keys'] = FLAGS.cassandra_stress_preload_num_keys
   # Preload database
   if benchmark_spec.metadata['num_preload_keys']:
+    logging.info('Preloading cassandra database.')
     if (FLAGS.cassandra_stress_command == 'read' or
         FLAGS.cassandra_stress_command == 'mixed'):
       cassandra_stress_command = 'write'
@@ -357,6 +359,7 @@ def RunCassandraStress(benchmark_spec,
   num_loaders = len(loader_vms)
   cassandra_vms = benchmark_spec.vm_groups[CASSANDRA_GROUP]
   data_node_ips = [vm.internal_ip for vm in cassandra_vms]
+  cassandra_stress_pop_size = cassandra_stress_pop_size or num_ops
   ops_per_vm = num_ops / num_loaders
   pop_per_vm = cassandra_stress_pop_size / num_loaders
   if num_ops % num_loaders:
@@ -442,6 +445,9 @@ def RunCassandraStressTest(benchmark_spec,
                        cassandra_stress_pop_size,
                        cassandra_stress_pop_dist,
                        cassandra_stress_pop_params)
+  except:
+    logging.exception('Test failed.')
+    raise
   finally:
     logging.info('Tests running. Watching progress.')
     vm_util.RunThreaded(WaitForLoaderToFinish,
