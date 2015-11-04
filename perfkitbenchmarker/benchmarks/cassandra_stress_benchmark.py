@@ -88,6 +88,7 @@ flags.DEFINE_enum('cassandra_stress_consistency_level', 'QUORUM',
 
 flags.DEFINE_integer('cassandra_stress_retries', 1000,
                      'Number of retries when error encountered during stress.')
+
 # Use ./cassandra-stress -help pop to get more details.
 # [dist=DIST(?)]: Seeds are selected from this distribution
 #  EXP(min..max):
@@ -114,20 +115,21 @@ flags.DEFINE_enum('cassandra_stress_pop_distribution', None,
 
 flags.DEFINE_integer('cassandra_stress_pop_size', None,
                      'The range of the distribution across all clients. '
-                     'By default, the size of the pop is the same as '
-                     '--num_keys.')
+                     'By default, the size of the population equals to '
+                     'max(num_keys,cassandra_stress_preload_num_keys).')
 
 flags.DEFINE_list('cassandra_stress_pop_parameters', [],
                   'Additional parameters to use with distribution. '
                   'This benchmark will calculate min, max for each '
                   'distribution. Some distributions need more parameters. '
+                  'See: ./cassandra-stress -help pop for more details. '
                   'Comma-separated list.')
 
 # Options to use with cassandra-stress mixed mode, below flags only matter if
 # --cassandra_stress_command=mixed.
 flags.DEFINE_string('cassandra_stress_mixed_ratio', 'write=1,read=1',
                     'Read/write ratio of cassandra-stress. Only valid if '
-                    '--cassandra_stress_command=mix. By default, '
+                    '--cassandra_stress_command=mixed. By default, '
                     '50% read and 50% write.')
 
 # Options to use with cassandra-stress user mode, below flags only matter if
@@ -285,7 +287,7 @@ def RunTestOnLoader(vm,
   Args:
     vm: The target vm.
     loader_index: The index of target vm in loader vms.
-    ops_per_vm: The number of ops per loader vm need to insert.
+    ops_per_vm: The number of operations each loader vm requests.
     data_node_ips: List of IP addresses for all data nodes.
     cassandra_stress_command: The cassandra-stress command to use.
     cassandra_stress_profile_ops: The ops to use with user mode.
@@ -520,7 +522,8 @@ def Run(benchmark_spec):
   """
   benchmark_spec.metadata.update({
       'pop_size': (FLAGS.cassandra_stress_pop_size or
-                   benchmark_spec.metadata['num_keys']),
+                   max(benchmark_spec.metadata['num_keys'],
+                       benchmark_spec.metadata['num_preload_keys'])),
       'pop_dist': FLAGS.cassandra_stress_pop_distribution,
       'pop_parameters': ','.join(FLAGS.cassandra_stress_pop_parameters)})
 
