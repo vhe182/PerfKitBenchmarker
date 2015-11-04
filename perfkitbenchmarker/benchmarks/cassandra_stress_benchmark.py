@@ -89,7 +89,7 @@ flags.DEFINE_enum('cassandra_stress_consistency_level', 'QUORUM',
 flags.DEFINE_integer('cassandra_stress_retries', 1000,
                      'Number of retries when error encountered during stress.')
 
-# Use ./cassandra-stress -help pop to get more details.
+# Use "./cassandra-stress help -pop" to get more details.
 # [dist=DIST(?)]: Seeds are selected from this distribution
 #  EXP(min..max):
 #      An exponential distribution over the range [min..max]
@@ -122,7 +122,7 @@ flags.DEFINE_list('cassandra_stress_pop_parameters', [],
                   'Additional parameters to use with distribution. '
                   'This benchmark will calculate min, max for each '
                   'distribution. Some distributions need more parameters. '
-                  'See: ./cassandra-stress -help pop for more details. '
+                  'See: "./cassandra-stress help -pop" for more details. '
                   'Comma-separated list.')
 
 # Options to use with cassandra-stress mixed mode, below flags only matter if
@@ -247,9 +247,9 @@ def Prepare(benchmark_spec):
   else:
     benchmark_spec.metadata[
         'num_preload_keys'] = FLAGS.cassandra_stress_preload_num_keys
+
   # Preload database
   if benchmark_spec.metadata['num_preload_keys']:
-    logging.info('Preloading cassandra database.')
     if (FLAGS.cassandra_stress_command == 'read' or
         FLAGS.cassandra_stress_command == 'mixed'):
       cassandra_stress_command = 'write'
@@ -257,6 +257,9 @@ def Prepare(benchmark_spec):
       cassandra_stress_command = 'counter_write'
     else:
       cassandra_stress_command = FLAGS.cassandra_stress_command
+    logging.info('Preloading cassandra database with %s %s operations.',
+                 benchmark_spec.metadata['num_preload_keys'],
+                 cassandra_stress_command)
     RunCassandraStressTest(
         benchmark_spec,
         benchmark_spec.metadata['num_preload_keys'],
