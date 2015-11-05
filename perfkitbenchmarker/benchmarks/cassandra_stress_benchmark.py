@@ -404,7 +404,7 @@ def RunTestOnLoader(vm,
 def RunCassandraStressTest(benchmark_spec,
                            num_ops,
                            cassandra_stress_command,
-                           cassandra_stress_profile_ops=None,
+                           cassandra_stress_profile_ops='insert=1',
                            cassandra_stress_pop_size=None,
                            cassandra_stress_pop_dist=None,
                            cassandra_stress_pop_params=None):
