@@ -233,19 +233,7 @@ def SetupMetadata(benchmark_spec):
         required to run the benchmark.
   """
   vm_dict = benchmark_spec.vm_groups
-  benchmark_spec.metadata = {
-      'num_data_nodes': len(vm_dict[CASSANDRA_GROUP]),
-      'num_loader_nodes': len(vm_dict[CLIENT_GROUP]),
-      'num_cassandra_stress_threads': FLAGS.num_cassandra_stress_threads,
-      'command': FLAGS.cassandra_stress_command,
-      'consistency_level': FLAGS.cassandra_stress_consistency_level,
-      'retries': FLAGS.cassandra_stress_retries,
-      'pop_size': (FLAGS.cassandra_stress_pop_size or
-                   max(benchmark_spec.metadata['num_keys'],
-                       benchmark_spec.metadata['num_preload_keys'])),
-      'pop_dist': FLAGS.cassandra_stress_pop_distribution,
-      'pop_parameters': ','.join(FLAGS.cassandra_stress_pop_parameters)}
-
+  benchmark_spec.metadata = {}
   if not FLAGS.num_keys:
     benchmark_spec.metadata['num_keys'] = (
         NUM_KEYS_PER_CORE * vm_dict[CASSANDRA_GROUP][0].num_cpus)
@@ -262,6 +250,19 @@ def SetupMetadata(benchmark_spec):
   else:
     benchmark_spec.metadata[
         'num_preload_keys'] = FLAGS.cassandra_stress_preload_num_keys
+
+  benchmark_spec.metadata.update({
+      'num_data_nodes': len(vm_dict[CASSANDRA_GROUP]),
+      'num_loader_nodes': len(vm_dict[CLIENT_GROUP]),
+      'num_cassandra_stress_threads': FLAGS.num_cassandra_stress_threads,
+      'command': FLAGS.cassandra_stress_command,
+      'consistency_level': FLAGS.cassandra_stress_consistency_level,
+      'retries': FLAGS.cassandra_stress_retries,
+      'pop_size': (FLAGS.cassandra_stress_pop_size or
+                   max(benchmark_spec.metadata['num_keys'],
+                       benchmark_spec.metadata['num_preload_keys'])),
+      'pop_dist': FLAGS.cassandra_stress_pop_distribution,
+      'pop_parameters': ','.join(FLAGS.cassandra_stress_pop_parameters)})
 
   if FLAGS.cassandra_stress_command == USER_COMMAND:
     benchmark_spec.metadata.update({
