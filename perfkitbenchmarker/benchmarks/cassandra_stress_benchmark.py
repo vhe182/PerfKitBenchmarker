@@ -111,9 +111,9 @@ flags.DEFINE_enum('cassandra_stress_pop_distribution', None,
                   ['EXP', 'EXTREME', 'QEXTREME', 'GAUSSIAN', 'UNIFORM',
                    '~EXP', '~EXTREME', '~QEXTREME', '~GAUSSIAN', '~UNIFORM'],
                   'The population distribution cassandra-stress uses. '
-                  'By default, no distribution will be used, each loader vm '
-                  'is given a range of keys [min, max], and loaders will '
-                  'read/insert keys sequentially from min to max.')
+                  'By default, each loader vm is given a range of keys '
+                  '[min, max], and loaders will read/insert keys sequentially '
+                  'from min to max.')
 
 flags.DEFINE_integer('cassandra_stress_pop_size', None,
                      'The size of the population across all clients. '
