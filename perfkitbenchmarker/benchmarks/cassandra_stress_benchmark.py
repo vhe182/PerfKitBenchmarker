@@ -384,7 +384,7 @@ def RunTestOnLoader(vm, loader_index, ops_per_vm, data_node_ips,
         replication_factor=FLAGS.cassandra_stress_replication_factor)
 
   pop_range = '%s..%s' % (loader_index * pop_per_vm + 1,
-                           (loader_index + 1) * pop_per_vm)
+                          (loader_index + 1) * pop_per_vm)
   if pop_params:
     pop_params = '%s,%s' % (pop_range, pop_params)
   else:
