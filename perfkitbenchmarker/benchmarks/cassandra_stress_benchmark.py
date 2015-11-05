@@ -210,6 +210,80 @@ def CheckPrerequisites():
     data.ResourcePath(FLAGS.cassandra_stress_profile)
 
 
+def SetupMetadata(benchmark_spec):
+  """Setup benchmark_spec.metadata.
+
+  Args:
+    benchmark_spec: The benchmark specification. Contains all data that is
+        required to run the benchmark.
+  """
+  vm_dict = benchmark_spec.vm_groups
+  benchmark_spec.metadata = {
+      'num_data_nodes': len(vm_dict[CASSANDRA_GROUP]),
+      'num_loader_nodes': len(vm_dict[CLIENT_GROUP]),
+      'num_cassandra_stress_threads': FLAGS.num_cassandra_stress_threads,
+      'command': FLAGS.cassandra_stress_command,
+      'consistency_level': FLAGS.cassandra_stress_consistency_level,
+      'retries': FLAGS.cassandra_stress_retries,
+      'pop_size': (FLAGS.cassandra_stress_pop_size or
+                   max(benchmark_spec.metadata['num_keys'],
+                       benchmark_spec.metadata['num_preload_keys'])),
+      'pop_dist': FLAGS.cassandra_stress_pop_distribution,
+      'pop_parameters': ','.join(FLAGS.cassandra_stress_pop_parameters)}
+
+  if not FLAGS.num_keys:
+    benchmark_spec.metadata['num_keys'] = (
+        NUM_KEYS_PER_CORE * vm_dict[CASSANDRA_GROUP][0].num_cpus)
+    logging.info(
+        'Num keys not set, using %s in cassandra-stress test.',
+        benchmark_spec.metadata['num_keys'])
+  else:
+    benchmark_spec.metadata['num_keys'] = FLAGS.num_keys
+
+  if (FLAGS.cassandra_stress_command in PRELOAD_REQUIRED and
+      not FLAGS.cassandra_stress_preload_num_keys):
+    benchmark_spec.metadata['num_preload_keys'] = benchmark_spec.metadata[
+        'num_keys']
+  else:
+    benchmark_spec.metadata[
+        'num_preload_keys'] = FLAGS.cassandra_stress_preload_num_keys
+
+  if FLAGS.cassandra_stress_command == USER_COMMAND:
+    benchmark_spec.metadata.update({
+        'profile': FLAGS.cassandra_stress_profile,
+        'ops': FLAGS.cassandra_stress_ops})
+  else:
+    if FLAGS.cassandra_stress_command == MIXED_COMMAND:
+      benchmark_spec.metadata[
+          'mixed_ratio'] = FLAGS.cassandra_stress_mixed_ratio
+    benchmark_spec.metadata[
+        'replication_factor'] = FLAGS.cassandra_stress_replication_factor
+
+
+def PreloadCassandraServer(benchmark_spec):
+  """Preload cassandra cluster if necessary.
+
+  Args:
+    benchmark_spec: The benchmark specification. Contains all data that is
+        required to run the benchmark.
+  """
+  if benchmark_spec.metadata['num_preload_keys']:
+    if (FLAGS.cassandra_stress_command == 'read' or
+        FLAGS.cassandra_stress_command == 'mixed'):
+      cassandra_stress_command = 'write'
+    elif FLAGS.cassandra_stress_command == 'counter_read':
+      cassandra_stress_command = 'counter_write'
+    else:
+      cassandra_stress_command = FLAGS.cassandra_stress_command
+    logging.info('Preloading cassandra database with %s %s operations.',
+                 benchmark_spec.metadata['num_preload_keys'],
+                 cassandra_stress_command)
+    RunCassandraStressTest(
+        benchmark_spec,
+        benchmark_spec.metadata['num_preload_keys'],
+        cassandra_stress_command)
+
+
 def Prepare(benchmark_spec):
   """Install Cassandra and Java on target vms.
 
@@ -230,50 +304,39 @@ def Prepare(benchmark_spec):
   configure = functools.partial(cassandra.Configure, seed_vms=[seed_vm])
   vm_util.RunThreaded(configure, cassandra_vms)
   cassandra.StartCluster(seed_vm, cassandra_vms[1:])
-  benchmark_spec.metadata = {}
-  if not FLAGS.num_keys:
-    benchmark_spec.metadata['num_keys'] = (
-        NUM_KEYS_PER_CORE * cassandra_vms[0].num_cpus)
-    logging.info(
-        'Num keys not set, using %s in cassandra-stress test.',
-        benchmark_spec.metadata['num_keys'])
-  else:
-    benchmark_spec.metadata['num_keys'] = FLAGS.num_keys
-
-  if (FLAGS.cassandra_stress_command in PRELOAD_REQUIRED and
-      not FLAGS.cassandra_stress_preload_num_keys):
-    benchmark_spec.metadata['num_preload_keys'] = benchmark_spec.metadata[
-        'num_keys']
-  else:
-    benchmark_spec.metadata[
-        'num_preload_keys'] = FLAGS.cassandra_stress_preload_num_keys
-
-  # Preload database
-  if benchmark_spec.metadata['num_preload_keys']:
-    if (FLAGS.cassandra_stress_command == 'read' or
-        FLAGS.cassandra_stress_command == 'mixed'):
-      cassandra_stress_command = 'write'
-    elif FLAGS.cassandra_stress_command == 'counter_read':
-      cassandra_stress_command = 'counter_write'
-    else:
-      cassandra_stress_command = FLAGS.cassandra_stress_command
-    logging.info('Preloading cassandra database with %s %s operations.',
-                 benchmark_spec.metadata['num_preload_keys'],
-                 cassandra_stress_command)
-    RunCassandraStressTest(
-        benchmark_spec,
-        benchmark_spec.metadata['num_preload_keys'],
-        cassandra_stress_command)
 
   if FLAGS.cassandra_stress_command == USER_COMMAND:
     for vm in vm_dict[CLIENT_GROUP]:
       vm.PushFile(FLAGS.cassandra_stress_profile,
                   TEMP_PROFILE_PATH)
 
+  SetupMetadata(benchmark_spec)
+  PreloadCassandraServer(benchmark_spec)
+
 
 def _ResultFilePath(vm):
   return posixpath.join(vm_util.VM_TMP_DIR,
                         vm.hostname + '.stress_results.txt')
+
+
+def WaitForLoaderToFinish(vm):
+  """Watch loader node and wait for it to finish test.
+
+  Args:
+    vm: The target vm.
+  """
+  result_path = _ResultFilePath(vm)
+  while True:
+    resp, _ = vm.RemoteCommand('tail -n 1 ' + result_path)
+    if re.findall(r'END', resp):
+      break
+    if re.findall(r'FAILURE', resp):
+      vm.PullFile(vm_util.GetTempDir(), result_path)
+      raise errors.Benchmarks.RunError(
+          'cassandra-stress tool failed, check %s for details.'
+          % posixpath.join(vm_util.GetTempDir(),
+                           os.path.basename(result_path)))
+    time.sleep(SLEEP_BETWEEN_CHECK_IN_SECONDS)
 
 
 def RunTestOnLoader(vm,
@@ -338,66 +401,54 @@ def RunTestOnLoader(vm,
           threads=FLAGS.num_cassandra_stress_threads))
 
 
-def RunCassandraStress(benchmark_spec,
-                       num_ops,
-                       cassandra_stress_command,
-                       cassandra_stress_profile_ops,
-                       cassandra_stress_pop_size,
-                       cassandra_stress_pop_dist,
-                       cassandra_stress_pop_params):
-  """Start Cassandra test.
+def RunCassandraStressTest(benchmark_spec,
+                           num_ops,
+                           cassandra_stress_command,
+                           cassandra_stress_profile_ops=None,
+                           cassandra_stress_pop_size=None,
+                           cassandra_stress_pop_dist=None,
+                           cassandra_stress_pop_params=None):
+  """Start all loader nodes as Cassandra clients and run stress test.
 
   Args:
     benchmark_spec: The benchmark specification. Contains all data
         that is required to run the benchmark.
-    num_ops: The number of operations cassandra-stress clients should issue.
+    num_keys: The number of operations cassandra-stress clients should issue.
     cassandra_stress_command: The cassandra-stress command to use.
     cassandra_stress_profile_ops: The ops to use with user mode.
     cassandra_stress_pop_size: The population size.
     cassandra_stress_pop_dist: The population distribution.
-    cassandra_stress_pop_params: String representing additional population
-        parameters.
+    cassandra_stress_pop_params: String representing additional
+        population parameters.
   """
-  loader_vms = benchmark_spec.vm_groups[CLIENT_GROUP]
-  num_loaders = len(loader_vms)
-  cassandra_vms = benchmark_spec.vm_groups[CASSANDRA_GROUP]
-  data_node_ips = [vm.internal_ip for vm in cassandra_vms]
-  cassandra_stress_pop_size = cassandra_stress_pop_size or num_ops
-  ops_per_vm = num_ops / num_loaders
-  pop_per_vm = cassandra_stress_pop_size / num_loaders
-  if num_ops % num_loaders:
-    logging.warn(
-        'Total number of ops rounded to %s (%s ops per loader vm).',
-        ops_per_vm * num_loaders, ops_per_vm)
-  logging.info('Executing the benchmark.')
-  args = [((loader_vms[i], i, ops_per_vm, data_node_ips,
-            cassandra_stress_command,
-            cassandra_stress_profile_ops,
-            pop_per_vm,
-            cassandra_stress_pop_dist,
-            cassandra_stress_pop_params), {})
-          for i in xrange(0, num_loaders)]
-  vm_util.RunThreaded(RunTestOnLoader, args)
-
-
-def WaitForLoaderToFinish(vm):
-  """Watch loader node and wait for it to finish test.
-
-  Args:
-    vm: The target vm.
-  """
-  result_path = _ResultFilePath(vm)
-  while True:
-    resp, _ = vm.RemoteCommand('tail -n 1 ' + result_path)
-    if re.findall(r'END', resp):
-      break
-    if re.findall(r'FAILURE', resp):
-      vm.PullFile(vm_util.GetTempDir(), result_path)
-      raise errors.Benchmarks.RunError(
-          'cassandra-stress tool failed, check %s for details.'
-          % posixpath.join(vm_util.GetTempDir(),
-                           os.path.basename(result_path)))
-    time.sleep(SLEEP_BETWEEN_CHECK_IN_SECONDS)
+  try:
+    loader_vms = benchmark_spec.vm_groups[CLIENT_GROUP]
+    num_loaders = len(loader_vms)
+    cassandra_vms = benchmark_spec.vm_groups[CASSANDRA_GROUP]
+    data_node_ips = [vm.internal_ip for vm in cassandra_vms]
+    cassandra_stress_pop_size = cassandra_stress_pop_size or num_ops
+    ops_per_vm = num_ops / num_loaders
+    pop_per_vm = cassandra_stress_pop_size / num_loaders
+    if num_ops % num_loaders:
+      logging.warn(
+          'Total number of ops rounded to %s (%s ops per loader vm).',
+          ops_per_vm * num_loaders, ops_per_vm)
+      logging.info('Executing the benchmark.')
+    args = [((loader_vms[i], i, ops_per_vm, data_node_ips,
+              cassandra_stress_command,
+              cassandra_stress_profile_ops,
+              pop_per_vm,
+              cassandra_stress_pop_dist,
+              cassandra_stress_pop_params), {})
+            for i in xrange(0, num_loaders)]
+    vm_util.RunThreaded(RunTestOnLoader, args)
+  except:
+    logging.exception('Test failed.')
+    raise
+  finally:
+    logging.info('Tests running. Watching progress.')
+    vm_util.RunThreaded(WaitForLoaderToFinish,
+                        benchmark_spec.vm_groups[CLIENT_GROUP])
 
 
 def CollectResultFile(vm, results):
@@ -421,42 +472,6 @@ def CollectResultFile(vm, results):
       results[metric].append(float(value))
 
 
-def RunCassandraStressTest(benchmark_spec,
-                           num_ops,
-                           cassandra_stress_command,
-                           cassandra_stress_profile_ops=None,
-                           cassandra_stress_pop_size=None,
-                           cassandra_stress_pop_dist=None,
-                           cassandra_stress_pop_params=None):
-  """Start all loader nodes as Cassandra clients and run stress test.
-
-  Args:
-    benchmark_spec: The benchmark specification. Contains all data
-        that is required to run the benchmark.
-    num_keys: The number of operations cassandra-stress clients should issue.
-    cassandra_stress_command: The cassandra-stress command to use.
-    cassandra_stress_profile_ops: The ops to use with user mode.
-    cassandra_stress_pop_size: The population size.
-    cassandra_stress_pop_dist: The population distribution.
-    cassandra_stress_pop_params: String representing additional
-        population parameters.
-  """
-  try:
-    RunCassandraStress(benchmark_spec, num_ops,
-                       cassandra_stress_command,
-                       cassandra_stress_profile_ops,
-                       cassandra_stress_pop_size,
-                       cassandra_stress_pop_dist,
-                       cassandra_stress_pop_params)
-  except:
-    logging.exception('Test failed.')
-    raise
-  finally:
-    logging.info('Tests running. Watching progress.')
-    vm_util.RunThreaded(WaitForLoaderToFinish,
-                        benchmark_spec.vm_groups[CLIENT_GROUP])
-
-
 def CollectResults(benchmark_spec):
   """Collect and parse test results.
 
@@ -473,27 +488,6 @@ def CollectResults(benchmark_spec):
   raw_results = collections.defaultdict(list)
   args = [((vm, raw_results), {}) for vm in loader_vms]
   vm_util.RunThreaded(CollectResultFile, args)
-
-  benchmark_spec.metadata.update({
-      'num_data_nodes': len(vm_dict[CASSANDRA_GROUP]),
-      'num_loader_nodes': len(loader_vms),
-      'num_cassandra_stress_threads': FLAGS.num_cassandra_stress_threads,
-      'command': FLAGS.cassandra_stress_command,
-      'consistency_level': FLAGS.cassandra_stress_consistency_level,
-      'retries': FLAGS.cassandra_stress_retries})
-
-  if FLAGS.cassandra_stress_command == USER_COMMAND:
-    benchmark_spec.metadata.update({
-        'profile': FLAGS.cassandra_stress_profile,
-        'ops': FLAGS.cassandra_stress_ops})
-  else:
-    if FLAGS.cassandra_stress_command == MIXED_COMMAND:
-      benchmark_spec.metadata[
-          'mixed_ratio'] = FLAGS.cassandra_stress_mixed_ratio
-
-    benchmark_spec.metadata[
-        'replication_factor'] = FLAGS.cassandra_stress_replication_factor
-
   results = []
   for metric in RESULTS_METRICS:
     if metric in MAXIMUM_METRICS:
@@ -523,13 +517,6 @@ def Run(benchmark_spec):
   Returns:
     A list of sample.Sample objects.
   """
-  benchmark_spec.metadata.update({
-      'pop_size': (FLAGS.cassandra_stress_pop_size or
-                   max(benchmark_spec.metadata['num_keys'],
-                       benchmark_spec.metadata['num_preload_keys'])),
-      'pop_dist': FLAGS.cassandra_stress_pop_distribution,
-      'pop_parameters': ','.join(FLAGS.cassandra_stress_pop_parameters)})
-
   RunCassandraStressTest(
       benchmark_spec,
       benchmark_spec.metadata['num_keys'],
