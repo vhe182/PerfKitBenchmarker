@@ -70,9 +70,16 @@ flags.DEFINE_integer('cassandra_stress_preload_num_keys', 0,
 # Options for cassandra-stress
 flags.DEFINE_integer('num_keys', 0,
                      'Number of keys used in cassandra-stress tool across '
-                     'all loader vms. If unset, this benchmark will use '
-                     '%s * num_cpus on data nodes as the value.'
-                     % NUM_KEYS_PER_CORE)
+                     'all loader vms. If both --num_keys and '
+                     '--cassandra_stress_duration are unset, this benchmark '
+                     'will use %s * num_cpus on data nodes as the value. '
+                     'This flag cannot be used together with '
+                     '--cassandra_stress_duration.' % NUM_KEYS_PER_CORE)
+
+flags.DEFINE_string('cassandra_stress_duration', '',
+                    'Duration of cassandra-stress test. '
+                    'If not set, --num_keys will be used. '
+                    'This flag cannot be used together with --num_keys.')
 
 flags.DEFINE_integer('num_cassandra_stress_threads', 50,
                      'Number of threads used in cassandra-stress tool '
